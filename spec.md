@@ -1,12 +1,12 @@
 <a name="start"/>
 # DataSetPack Specification
 
-DataSetPack is an data set serialization specification like binary-packed csv.
+DataSetPack is an data set serialization specification like binary-packed csv.<br>
 It can be used as data storage or transfer format.
 
 Core Concept in DataSetPack are **schema** and **row**, a little like in a SQL system.
 
-Schema define items in row, each item has type and length info.
+Schema define items in row, each item has type and length info.<br>
 and, schema info can be embed in data, so the data can be unpack it-self.
 
 This document describes the DataSetPack schema and data formats.
@@ -28,14 +28,6 @@ This document describes the DataSetPack schema and data formats.
 <a name="schema"/>
 ## Schema
 
-| Character | Byte order             | Size     | Alignment |
-| @	        | native                 | native   | native    |
-| =         | native                 | standard | none      |
-| <         | little-endian          | standard | none      |
-| >         | big-endian             | standard | none      |
-| !         | network (= big-endian) | standard | none      |
-
-
 ```
 schema ::= flag { field }
 flag   ::= `!´ | `@´ | `=´ | `<´ | `>´
@@ -51,6 +43,49 @@ Notes:
 
 * spacing is always ignore unless in desc.
 
+
+**flag**
+
+```
+Character  Byte order              Size      Alignment
+@          native                  native    native
+=          native                  standard  none
+<          little-endian           standard  none
+>          big-endian              standard  none
+!          network (= big-endian)  standard  none
+```
+
+**type**
+
+```
+Format(ssize)   C Type              Python type         Notes
+x  1            pad byte            no value             
+c  1            char                string of length 1   
+b  1            signed char         integer             (3)
+B  1            unsigned char       integer             (3)
+?  1            _Bool               bool                (1)
+h  2            short               integer             (3)
+H  2            unsigned short      integer             (3)
+i  4            int                 integer             (3)
+I  4            unsigned int        integer             (3)
+l  4            long                integer             (3)
+L  4            unsigned long       integer             (3)
+q  8            long long           integer             (2), (3)
+Q  8            unsigned long long  integer             (2), (3)
+f  4            float               float               (4)
+d  8            double              float               (4)
+s               char[]              string               
+p               char[]              string               
+S               char[]              string              (*) auto trim tail '\0'
+P               void *              integer             (5), (3)
+```
+
+Notes:
+
+* For the `f` and `d` conversion codes, the packed representation uses the IEEE 754 binary32 (for `f`) or binary64 (for `d`) format,
+  regardless of the floating-point format used by the platform.
+
+
 ### Example
 
 ```
@@ -58,8 +93,8 @@ Notes:
   2~:Q(app_ids) 2~:H(changes App's rank change)
 ```
 
-number before string tell that how long this string is.
-if a `~` follow by the number, it means the length of string is dynamic.
+number before string tell that how long this string is.<br>
+if a `~` follow by the number, it means the length of string is dynamic.<br>
 the mean of number change to bytes to save or read the following string.
 
 number has same means for list.
@@ -92,36 +127,6 @@ B    - one unsigned char
 
 Note: `B` in list can be replace by string.
 
-```
-Format(ssize)   C Type              Python type         Notes
-x  1            pad byte            no value             
-c  1            char                string of length 1   
-b  1            signed char         integer             (3)
-B  1            unsigned char       integer             (3)
-?  1            _Bool               bool                (1)
-h  2            short               integer             (3)
-H  2            unsigned short      integer             (3)
-i  4            int                 integer             (3)
-I  4            unsigned int        integer             (3)
-l  4            long                integer             (3)
-L  4            unsigned long       integer             (3)
-q  8            long long           integer             (2), (3)
-Q  8            unsigned long long  integer             (2), (3)
-f  4            float               float               (4)
-d  8            double              float               (4)
-s               char[]              string               
-p               char[]              string               
-S               char[]              string              (*) auto trim tail '\0'
-P               void *              integer             (5), (3)
-```
-
-Notes:
-
-* For the `f` and `d` conversion codes, the packed representation uses the IEEE 754 binary32 (for `f`) or binary64 (for `d`) format,
-  regardless of the floating-point format used by the platform.
-
-
-
 ``` python
 from dspack import DsPack
 
@@ -145,7 +150,7 @@ row_data ::= row_length row
 
 when some time read `row_length` as `0` but `src` not reach `eof`, parser will restart again(looking for `meta_length`).
 
-at begin, read meta head length from first 2 bytes, if all bits is 1, read 2 more bytes.
+at begin, read meta head length from first 2 bytes, if all bits is 1, read 2 more bytes.<br>
 when got meta head length, read meta info.
 
 in meta info:
@@ -156,8 +161,8 @@ in meta info:
 * dict-style meta
 
 
-`row` struct depends on `schema`.
-at default, parser will unpack first part of fixed length fileds.
+`row` struct depends on `schema`.<br>
+at default, parser will unpack first part of fixed length fileds.<br>
 you can ask parser unpack all fields when read `row` data.
 
 ``` python
