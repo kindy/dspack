@@ -48,7 +48,6 @@ Notes:
 
 ```
 Character  Byte order              Size      Alignment
-@          native                  native    native
 =          native                  standard  none
 <          little-endian           standard  none
 >          big-endian              standard  none
