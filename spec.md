@@ -32,8 +32,8 @@ This document describes the DataSetPack schema and data formats.
 schema ::= flag { field }
 flag   ::= `!´ | `@´ | `=´ | `<´ | `>´
 field  ::= (list | single) [ @desc ]
-list   ::= { (Int | `~´) } `:´ single
-single ::= { (Int | `~´) } strtyp | notstrtyp
+list   ::= [ (Int | `~´) ] `:´ single
+single ::= [ (Int | `~´) ] strtyp | notstrtyp
 strtyp ::= `s´ | `p´
 notstrtyp ::= (Char - strtyp)
 desc   ::= `(´ Indent [ ` ´ { All - `)´ } ] `)´
