@@ -9,8 +9,17 @@ MAX_LEN = 0xFFFFFFFFFFFFFFFF >> 1
 BIG_LEN = 0xFFFFFFFF >> 1
 BIG_LEN_PAD = 1 << 63
 
+LEN_DYN_STR = -1
+LEN_DYN_LST_FIX_ITEM = -2
+LEN_DYN_LST_DYN_ITEM = -3
+LEN_FIX_LST_DYN_ITEM = -4
+LEN_FIX_LST_FIX_ITEM = -5
+
 len_struct = Struct('!I')
 big_len_struct = Struct('!Q')
+
+class FieldNumberError(ValueError):
+    pass
 
 class FieldSchemaError(TypeError):
     pass
@@ -18,7 +27,16 @@ class FieldSchemaError(TypeError):
 class TooLongError(ValueError):
     pass
 
+
 def wlen(n):
+    """Return length of string
+
+    >>> wlen(12345)
+    '\x00\x0009'
+
+    >>> wlen(0xFFFFFFFF12345)
+    '\x80\x0f\xff\xff\xff\xf1#E'
+    """
     if n <= BIG_LEN:
         return len_struct.pack(n)
 
@@ -28,16 +46,20 @@ def wlen(n):
     return big_len_struct.pack(BIG_LEN_PAD + n)
 
 def rlen(s, offset=0):
+    """Read length from data
+
+    >>> rlen(wlen(12345))
+    (4, 12345)
+
+    >>> rlen(wlen(0xFFFFFFFF12345))
+    (8, 0xFFFFFFFF12345)
+    """
+
     n = len_struct.unpack(s[offset:offset + 4])[0]
     if (n >> 31) < 1:
         return 4, n
 
     return 8, big_len_struct.unpack(s[offset:offset + 8])[0] - BIG_LEN_PAD
-
-assert wlen(12345) == '\x00\x0009', 'wlen not ok'
-assert wlen(0xFFFFFFFF12345) == '\x80\x0f\xff\xff\xff\xf1#E', 'wlen for big not ok'
-assert rlen(wlen(12345)) == (4, 12345), 'rlen not ok'
-assert rlen(wlen(0xFFFFFFFF12345)) == (8, 0xFFFFFFFF12345), 'rlen for big not ok'
 
 
 class Field(object):
@@ -67,7 +89,7 @@ class Field(object):
     @property
     def fmt(self):
         '''
-        a tuple (count, format)
+        a tuple (field_count, field_format)
         '''
         if self._fmt is None:
             self._fmt = self.build_fmt()
@@ -75,17 +97,17 @@ class Field(object):
         return self._fmt
 
     def build_fmt(self):
-        if self.typ not in 'spS':
+        if not self.is_str:
             return (1, self.typ)
 
         if self.fixed:
             return (1, '%d%s' % (self.len, self.typ))
 
-        # 0 means need to load length from data
-        return (0, self.typ)
+        return (LEN_DYN_STR, self.typ)
 
     def __str__(self):
         return '%s: %s' % (self.id, self.typ)
+
 
 class ListField(Field):
 
@@ -101,17 +123,17 @@ class ListField(Field):
     def build_fmt(self):
         if self.fixed:
             if not self.typ.is_str:
-                return (self.len, '%d%s' % (self.len, self.typ.typ))
+                return (1, '%d%s' % (self.len, self.typ.typ))
 
             if self.typ.fixed:
                 return (1, '%ds' % (self.len * self.typ.len))
 
-            return (0, None)
+            return (LEN_FIX_LST_DYN_ITEM, None)
 
         if (not self.typ.is_str) or self.typ.fixed:
-            return (-1, None)
+            return (LEN_DYN_LST_FIX_ITEM, None)
 
-        return (0, None)
+        return (LEN_DYN_LST_DYN_ITEM, None)
 
     def __str__(self):
         return '%s: %s[]' % (self.id, self.typ.typ)
@@ -121,17 +143,18 @@ class Pack(object):
 
     def __init__(self, fmt):
         self.fmt = fmt
-        self.parse_fmt(fmt)
         self._buf = StringIO()
+
+        self.parse_fmt(fmt)
 
     def parse_fmt(self, fmt):
         '''
-            ._fmts ()
+            ._fmts []
                 fixed:
                 fmt: 'D2H23J'
                 count: (1, 2, 23)
-            ._fields ()
-            ._field_ids = ()
+            ._fields []
+            ._field_ids = []
 
         fixed-len string    - raw data
         dyn string          - <data-len>raw data
@@ -144,6 +167,7 @@ class Pack(object):
 
         dynamic string || dynamic list || (fixed list with dynamic string)
         '''
+
         fmt = fmt.lstrip()
         flag = fmt[0]
         if flag in '=<>!':
@@ -162,8 +186,10 @@ class Pack(object):
                     (?P<note>[^\)]*)
                 \)
             )?'''
+
         field_n = 0
         _fields = []
+
         for m in re.finditer(re_field, fmt, re.X):
             field_n += 1
             list_, llen, len_, typ, id_, note = m.groups()
@@ -203,13 +229,13 @@ class Pack(object):
             _fields.append(_field)
 
         self._fields = tuple(_fields)
+        self._field_num = len(self._fields)
         self._field_ids = tuple(_field.id for _field in _fields)
 
-        self.build_fmts(_fields)
+        self._fmts = self.compile_fmt(_fields)
 
-    def build_fmts(self, fields):
+    def compile_fmt(self, fields):
         _fmts = []
-        self._fmts = _fmts
         _fmt = None
         last_fixed = None
         fixed = None
@@ -231,6 +257,46 @@ class Pack(object):
 
             last_fixed = fixed
 
+        return _fmts
+
+    def _build_data_meta(self):
+        meta_b = []
+        # TODO: encoding, I want to save all in utf-8
+        meta_b.append(self.fmt)
+
+        meta = ''.join(meta_b)
+        return wlen(len(meta)) + meta
+
+    def _add_row(self, fields, _fmts):
+        if len(fields) != self._field_num:
+            raise FieldNumberError()
+
+# [[True, ['H', 'B', 'B', '3S', 'I'], [1, 1, 1, 1, 1]], [False, [-1, -1], [1, 1]], [True, ['2H', 'H', 'B'], [2, 1, 1]]]
+
+        start = 0
+        _buf = []
+        _buf_write = lambda x: _buf.append(x)
+        for fixed, fmts, lens in _fmts:
+            count = reduce((lambda m, x: m + x), lens, 0)
+            if fixed:
+                _buf_write(pack(''.join(fmts), *row[start:start+count]))
+                
+            start += count
+
+        _buf_str = ''.join(_buf)
+        self._buf.write(wlen(len(_buf_str)))
+        self._buf.write(_buf_str)
+
+        print _buf_str
+
+    def _build_data_row(self, row):
+        meta_b = []
+        # TODO: encoding, I want to save all in utf-8
+        meta_b.append(self.fmt)
+
+        meta = ''.join(meta_b)
+        return wlen(len(meta)) + meta
+
 
     def help(self):
         pass
@@ -245,11 +311,9 @@ class Pack(object):
         self.addRows(rows, row)
 
     def addRows(self, rows):
+        _fmts = self._wfmts
         for row in rows:
-            print row
-
-    def getData(self):
-        pass
+            self._add_row(row, _fmts)
 
 
 def dumps(fmt, rows):
@@ -271,15 +335,19 @@ def _test():
 
     _data = [
         [123, 2, 2, 'CN', 123654,
-            [123, 231, 1213], [1, 2, 0]
+            [123, 231, 1213], [1, 2, 0],
+            [1, 2], 234, 2
         ],
-        [123, 2, 2, 'CN', 123654,
-            [123, 231, 1213], [1, 2, 0]
+        [123, 2, 2, 'JP', 123654,
+            [123, 231, 1213], [1, 2, 0],
+            [1, 2], 234, 2
         ],
     ]
 
-    print p._fmts
-    p.addRows(_data)
+    print 'meta data:', repr(p._build_data_meta())
+
+    # print p._fmts
+    # p.addRows(_data)
 
     '''
     print repr(dumps(, ))
@@ -287,33 +355,3 @@ def _test():
 
 _test()
 
-'''
-    rank_struct = Struct('B3sIBBH')
-    null_change = -32767
- 
-    for f in glob.glob('20130801-143441-*'):
-        data = loads(zlibd(open(f, 'rb').read()))
- 
-        day = 123
-        c = 'CN '
-        cat = 12345
- 
-        # print 'ing: ', f
- 
-        for dev_feed, ranks in data.items():
-            len_ = len(ranks)
-            buf.write(rank_struct.pack(day, c, cat, 2, 2, len_))
-            app_ids = []
-            changes = []
-            for app_id, change in ranks:
-                app_ids.append(app_id)
-                changes.append(change if change is not None else null_change)
- 
-            buf.write(pack('%dQ' % len_, *app_ids))
-            buf.write(pack('%dh' % len_, *changes))
- 
-    print buf.getvalue()
-    buf.close()
- 
-convert()
-'''
